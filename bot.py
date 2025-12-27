@@ -68,49 +68,32 @@ def search_csv(query):
 # --- GPT 回答函式 ---
 def ask_gpt(user_msg):
     csv_context = search_csv(user_msg)
-    
+
     system_prompt = f"""
     你是一個專業的房地產專家助手，熟悉林口與龜山地區。
     
     任務說明：
     1. 使用者若詢問「買房、找房、房價」，請優先參考下方的【資料庫裡的房源】回答。
-    2. 若資料庫有資料，請務必提供「照片連結」並做簡單推銷。
+    2. 若資料庫有資料，請務必提供「照片連結」並做簡單推薦。
     3. 若資料庫沒資料，或使用者問的是「稅務、法規」，請用你的專業知識回答。
     4. 回答要親切、像真人房仲。
 
+    【資料庫裡的房源】：
     {csv_context}
     """
 
     try:
-        response = openai.ChatCompletion.create(
+        # 使用新版 OpenAI v1.0.0+ 語法
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg}
             ]
         )
-        return response.choices[0].message.content
+        ai_reply = response.choices[0].message.content
+        return ai_reply
     except Exception as e:
-        return f"腦袋打結了...原因：{e}"
-
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers['X-Line-Signature']
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
-@handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
-    user_msg = event.message.text
-    reply_text = ask_gpt(user_msg)
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply_text)
-    )
-
-if __name__ == "__main__":
-    app.run()
+        print(f"Error calling OpenAI: {e}")
+        return "抱歉，我的腦袋現在有點亂，請稍後再問我一次。"
