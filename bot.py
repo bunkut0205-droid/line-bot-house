@@ -12,10 +12,11 @@ app = Flask(__name__)
 # 🔑 設定區
 # ==========================================
 # 1. LINE 的鑰匙 (填入你自己的)
-LINE_CHANNEL_ACCESS_TOKEN = '你的_Channel_Access_Token_貼在這裡'
-LINE_CHANNEL_SECRET = '你的_Channel_Secret_貼在這裡'
+# 1. LINE 的鑰匙 (改為從 Render 環境變數讀取)
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 
-# 2. OpenAI 的鑰匙 (讀取環境變數，最安全！)
+# 2. OpenAI 的鑰匙
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 # ==========================================
 
