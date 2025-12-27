@@ -8,83 +8,73 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# ==========================================
-# 🔑 設定區
-# ==========================================
-# 1. LINE 的鑰匙 (填入你自己的)
-# 1. LINE 的鑰匙 (改為從 Render 環境變數讀取)
+# 1. 從環境變數讀取金鑰
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
-
-# 2. OpenAI 的鑰匙
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-# ==========================================
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-openai.api_key = OPENAI_API_KEY
 
-# 3. 讀取房源資料庫 (讀取林口 + 龜山)
-# ⚠️ 這裡的檔名必須跟你在 GitHub 上傳的一模一樣，一個字都不能錯喔！
+# 2. 載入 CSV 資料 (請確保 GitHub 上有這些檔案)
 csv_files = [
-    "（林口）大家房屋_46頁.csv",
-    "（龜山）大家房屋_102頁全集.csv"
+    "(林口) 大家房屋_46頁.csv",
+    "(龜山) 大家房屋_102頁全集.csv"
 ]
 
 data_frames = []
 for file in csv_files:
     try:
-        # 讀取檔案
-        d = pd.read_csv(file)
-        data_frames.append(d)
-        print(f"✅ 成功讀取：{file}")
+        df = pd.read_csv(file)
+        data_frames.append(df)
+        print(f"✅ 成功讀取: {file}")
     except Exception as e:
-        print(f"❌ 讀取失敗：{file}，原因：{e}")
+        print(f"❌ 無法讀取 {file}: {e}")
 
-# 把兩個檔案合併成一個大表格
 if data_frames:
-    df = pd.concat(data_frames, ignore_index=True)
-    print(f"🎉 資料庫合併完成！總共有 {len(df)} 筆房源資料。")
+    all_df = pd.concat(data_frames, ignore_index=True)
+    print(f"🎉 資料合併完成！總共有 {len(all_df)} 筆房源。")
 else:
-    df = pd.DataFrame()
-    print("⚠️ 警告：沒有讀到任何資料，機器人無法查詢房價。")
+    all_df = pd.DataFrame()
 
-# --- 搜尋函式 ---
+# --- 搜尋函式：優化欄位呈現 ---
 def search_csv(query):
-    if df.empty:
-        return ""
+    if all_df.empty:
+        return "目前資料庫無資料。"
     
     # 簡單關鍵字搜尋
-    mask = df.apply(lambda x: x.astype(str).str.contains(query, case=False).any(), axis=1)
-    results = df[mask]
-    
-    if not results.empty:
-        # 取前 5 筆給 GPT 參考，包含標題、價格、連結
-        preview = results[['標題', '價格', '照片連結']].head(5).to_string(index=False)
-        return f"【資料庫裡的房源】：\n{preview}\n"
-    else:
-        return ""
+    mask = all_df.apply(lambda x: x.astype(str).str.contains(query, case=False).any(), axis=1)
+    results = all_df[mask]
 
-# --- GPT 回答函式 ---
+    if not results.empty:
+        formatted_results = ""
+        # 僅取前 3 筆，避免字數過多導致 LINE 無法傳送
+        for _, row in results.head(3).iterrows():
+            formatted_results += f"🏠 物件：{row.get('標題', '無標題')}\n"
+            formatted_results += f"💰 價格：{row.get('價格', '不詳')}\n"
+            formatted_results += f"📏 坪數：{row.get('坪數', '不詳')} | 樓層：{row.get('樓層', '不詳')}\n"
+            formatted_results += f"🔗 連結：{row.get('照片連結', '無連結')}\n"
+            formatted_results += "----------------\n"
+        return formatted_results
+    else:
+        return "資料庫中沒有找到符合條件的物件。"
+
+# --- AI 對話函式 ---
 def ask_gpt(user_msg):
     csv_context = search_csv(user_msg)
-
-    system_prompt = f"""
-    你是一個專業的房地產專家助手，熟悉林口與龜山地區。
     
-    任務說明：
-    1. 使用者若詢問「買房、找房、房價」，請優先參考下方的【資料庫裡的房源】回答。
-    2. 若資料庫有資料，請務必提供「照片連結」並做簡單推薦。
-    3. 若資料庫沒資料，或使用者問的是「稅務、法規」，請用你的專業知識回答。
-    4. 回答要親切、像真人房仲。
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    
+    system_prompt = f"""
+    你是一個專業的房地產房仲助手。
+    請根據以下資料庫內容回答客戶，若資料庫沒找到，請改用你的專業知識提供建議。
+    請用條列式回覆，確保價格、坪數、樓層分行顯示，保持整潔。
 
-    【資料庫裡的房源】：
+    【資料庫搜尋結果】：
     {csv_context}
     """
 
     try:
-        # 使用新版 OpenAI v1.0.0+ 語法
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -92,8 +82,26 @@ def ask_gpt(user_msg):
                 {"role": "user", "content": user_msg}
             ]
         )
-        ai_reply = response.choices[0].message.content
-        return ai_reply
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"Error calling OpenAI: {e}")
-        return "抱歉，我的腦袋現在有點亂，請稍後再問我一次。"
+        return f"腦袋打結了...原因：{e}"
+
+# --- LINE Webhook 入口 ---
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers['X-Line-Signature']
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    user_msg = event.message.text
+    reply_msg = ask_gpt(user_msg)
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_msg))
+
+if __name__ == "__main__":
+    app.run()
